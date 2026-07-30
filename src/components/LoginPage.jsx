@@ -70,9 +70,6 @@ export default function LoginPage() {
     if (sentCode) {
       setCodeSent(true);
       setCountdown(60);
-      // 演示模式: 自动填入验证码
-      setCode(sentCode.split(''));
-      console.log('🔢 [演示] 验证码已自动填入:', sentCode);
     }
   };
 
@@ -315,7 +312,7 @@ export default function LoginPage() {
               <div>
                 <p className="text-sm text-gray-500 text-center mb-4">
                   验证码已发送至 <span className="text-blue-600 font-medium">{email}</span>
-                  <br /><span className="text-xs text-gray-400">(演示模式: 验证码已自动填入)</span>
+                  <br /><span className="text-xs text-gray-400">请查收邮件</span>
                 </p>
 
                 {/* 6 位验证码输入 */}

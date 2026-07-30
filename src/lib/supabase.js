@@ -16,6 +16,28 @@ export const isSupabaseConfigured = () => !!(supabaseUrl && supabaseKey);
 
 // ========== 认证服务 ==========
 
+// 发送邮箱验证码 (OTP)
+export async function sendEmailOtp(email) {
+  if (!isSupabaseConfigured()) throw new Error('Supabase 未配置');
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: true }
+  });
+  if (error) throw error;
+}
+
+// 验证邮箱验证码
+export async function verifyEmailOtp(email, token) {
+  if (!isSupabaseConfigured()) throw new Error('Supabase 未配置');
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'email'
+  });
+  if (error) throw error;
+  return data;
+}
+
 // GitHub OAuth 登录
 export async function signInWithGitHub() {
   if (!isSupabaseConfigured()) throw new Error('Supabase 未配置');

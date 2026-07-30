@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { signInWithGitHub, signOut as supabaseSignOut, onAuthStateChange, getSession, isSupabaseConfigured } from '../lib/supabase';
+import { signInWithGitHub, signOut as supabaseSignOut, onAuthStateChange, getSession, isSupabaseConfigured, sendEmailOtp, verifyEmailOtp } from '../lib/supabase';
 
 const AuthContext = createContext(null);
 
@@ -138,11 +138,17 @@ export function AuthProvider({ children }) {
       setError('请输入有效的邮箱地址');
       return null;
     }
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    // 模拟发送: 存入 localStorage + 控制台输出 (生产环境应调用后端发送邮件)
-    localStorage.setItem(`vc_${email}`, JSON.stringify({ code, expires: Date.now() + 5 * 60 * 1000 }));
-    console.log(`📧 [模拟邮件] 验证码已发送至 ${email}: ${code}`);
-    return code; // 实际项目中不应返回验证码, 此处仅用于演示
+    if (!isSupabaseConfigured()) {
+      setError('请先配置 Supabase');
+      return null;
+    }
+    try {
+      await sendEmailOtp(email);
+      return true; // Supabase 已发送邮件
+    } catch (err) {
+      setError('发送失败: ' + (err.message || '未知错误'));
+      return null;
+    }
   }, []);
 
   // --- 邮箱 + 验证码登录 / 注册 ---
@@ -150,34 +156,25 @@ export function AuthProvider({ children }) {
     clearError();
     if (!email || !code) { setError('请输入邮箱和验证码'); return null; }
     if (code.length !== 6) { setError('验证码为6位数字'); return null; }
+    if (!isSupabaseConfigured()) { setError('请先配置 Supabase'); return null; }
 
-    // 验证验证码
-    const stored = localStorage.getItem(`vc_${email}`);
-    if (!stored) { setError('请先获取验证码'); return null; }
-    const { code: savedCode, expires } = JSON.parse(stored);
-    if (Date.now() > expires) { setError('验证码已过期，请重新获取'); localStorage.removeItem(`vc_${email}`); return null; }
-    if (code !== savedCode) { setError('验证码错误'); return null; }
-    // 验证码用后即删
-    localStorage.removeItem(`vc_${email}`);
-
-    const users = getUsers();
-    const isNewUser = !users[email];
-    if (isNewUser) {
-      // 新用户注册
-      users[email] = { email, displayName: email.split('@')[0], createdAt: Date.now() };
-      saveUsers(users);
+    try {
+      const { session } = await verifyEmailOtp(email, code);
+      if (session?.user) {
+        const sessionUser = {
+          email: session.user.email,
+          displayName: session.user.email.split('@')[0],
+          loginMethod: 'code',
+        };
+        setCurrentUser(sessionUser);
+        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+        return { ...sessionUser };
+      }
+      return null;
+    } catch (err) {
+      setError('验证失败: ' + (err.message || '验证码错误'));
+      return null;
     }
-
-    const user = users[email];
-    const sessionUser = {
-      email,
-      displayName: user.displayName || email,
-      loginMethod: 'code',
-      isNewUser
-    };
-    setCurrentUser(sessionUser);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-    return { ...sessionUser, isNewUser };
   }, []);
 
   // --- 注册后设置密码 ---
