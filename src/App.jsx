@@ -702,7 +702,7 @@ function AddRecordModal({ onClose, categories, onSave }) {
         {/* 拍照附件按钮（独立一行，避免与智能输入冲突） */}
         <div className="mb-3">
           <label className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-500 cursor-pointer transition-colors">
-            <input type="file" accept="image/*" capture="environment" onChange={handlePickImage} className="hidden" />
+            <input type="file" accept="image/*" onChange={handlePickImage} className="hidden" />
             <Camera size={16}/> 拍照添加附件
           </label>
         </div>
@@ -717,7 +717,7 @@ function AddRecordModal({ onClose, categories, onSave }) {
               </div>
             ))}
             <label className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 hover:border-blue-300 hover:text-blue-400 cursor-pointer transition-colors shrink-0">
-              <input type="file" accept="image/*" capture="environment" onChange={handlePickImage} className="hidden" />
+              <input type="file" accept="image/*" onChange={handlePickImage} className="hidden" />
               <Plus size={22}/>
             </label>
           </div>
