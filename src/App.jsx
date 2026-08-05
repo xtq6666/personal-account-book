@@ -119,11 +119,12 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured() || !auth.currentUser?.email) return;
     if (syncStatus === 'off' || syncStatus === 'syncing') return;
+    // 防止空数据覆盖：records 为空时不主动推送（首次登录加载中）
+    if (!records.length && syncStatus === 'online') return;
     const timer = setTimeout(() => {
       saveUserData(auth.currentUser.email, { records, categories, budget });
     }, 2000);
-    // 页面关闭前强制保存
-    const handleUnload = () => saveUserData(auth.currentUser.email, { records, categories, budget });
+    const handleUnload = () => { if (records.length) saveUserData(auth.currentUser.email, { records, categories, budget }); };
     window.addEventListener('beforeunload', handleUnload);
     return () => {
       clearTimeout(timer);
