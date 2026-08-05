@@ -89,61 +89,32 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [records, categories, budget, syncStatus]);
 
-  // ===== 后端 API 同步 =====
+  // ===== Supabase 云端同步（主数据存储）=====
+  // 数据存在 Supabase，不会因 Render 重启丢失。后端 FastAPI 只管认证 + AI 识别。
+
+  // 登录后从 Supabase 拉取数据
   useEffect(() => {
-    if (!auth.currentUser?.email || !getToken()) return;
-    // 从后端 API 加载数据
-    Promise.all([
-      billsApi.list().catch(() => []),
-      categoriesApi.list().catch(() => []),
-      budgetsApi.list().catch(() => []),
-    ]).then(([apiRecords, apiCategories, apiBudgets]) => {
-      const hasApiData = apiRecords?.length || apiCategories?.length;
-      const hasLocalData = records.length > 0;
-
-      if (hasApiData) {
-        // 优先用后端数据
-        setRecords(apiRecords.map(r => ({
-          ...r, id: String(r.id), categoryId: String(r.category_id),
-          subCategoryName: r.sub_category_name || '', date: r.biz_date || r.date,
-          isReimbursable: r.is_reimbursable || false
-        })));
-
-        if (apiCategories?.length) {
-          const flat = apiCategories.map(c => ({ ...c, id: String(c.id), active: c.is_active !== false, order: c.sort_order || 0 }));
-          const mainCats = flat.filter(c => !c.parent_id).map(c => ({
-            ...c,
-            subCategories: flat.filter(s => String(s.parent_id) === c.id).map(s => ({ id: s.id, name: s.name, icon: s.icon, color: s.color }))
-          }));
-          if (flat.length) setCategories(mainCats);
-        }
-
-        if (apiBudgets?.length && !apiBudgets.error) {
-          const total = apiBudgets.find(b => !b.category_id)?.amount || 3000;
-          const catBudget = {};
-          apiBudgets.filter(b => b.category_id).forEach(b => { catBudget[String(b.category_id)] = b.amount; });
-          setBudget({ total, categoryBudgets: catBudget });
-        }
-      } else if (hasLocalData) {
-        // 后端空的但本地有数据 → 首次迁移：把本地数据推送到后端
-        console.log('📦 首次数据迁移：本地 → 云端');
-        // 批量创建流水（避免阻塞）
-        const pushRecords = async () => {
-          for (const r of records) {
-            try { await billsApi.create({ category_id: Number(r.categoryId), amount: r.amount, type: r.type, biz_date: r.date.split('T')[0], note: r.remark || '', is_reimbursable: r.isReimbursable || false }); } catch {}
-          }
-        };
-        const pushCategories = async () => {
-          for (const c of categories) {
-            try { await categoriesApi.create({ name: c.name, type: c.type, icon: c.icon, color: c.color, sort_order: c.order }); } catch {}
-          }
-        };
-        Promise.all([pushRecords(), pushCategories()]).then(() => {
-          console.log('✅ 数据迁移完成');
-        });
+    if (!isSupabaseConfigured() || !auth.currentUser?.email) return;
+    setSyncStatus('syncing');
+    loadUserData(auth.currentUser.email).then(cloudData => {
+      if (cloudData) {
+        if (cloudData.records?.length) setRecords(cloudData.records);
+        if (cloudData.categories?.length) setCategories(cloudData.categories);
+        if (cloudData.budget) setBudget(cloudData.budget);
       }
-    }).catch(() => {});
+      setSyncStatus('online');
+    }).catch(() => setSyncStatus('error'));
   }, [auth.currentUser?.email]);
+
+  // 数据变更后推送到 Supabase（限流 2 秒）
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !auth.currentUser?.email) return;
+    if (syncStatus === 'off' || syncStatus === 'syncing') return;
+    const timer = setTimeout(() => {
+      saveUserData(auth.currentUser.email, { records, categories, budget });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [records, categories, budget, syncStatus]);
 
   // --- 衍生数据计算 ---
   const currentMonth = new Date().getMonth();
