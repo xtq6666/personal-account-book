@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { signInWithGitHub, signOut as supabaseSignOut, onAuthStateChange, getSession, isSupabaseConfigured, sendEmailOtp, verifyEmailOtp } from '../lib/supabase';
+import { authApi, setToken, getToken } from '../lib/api';
 
 const AuthContext = createContext(null);
 
@@ -81,38 +82,44 @@ export function AuthProvider({ children }) {
     setIsLoading(false);
   }, []);
 
+  // 第三方/生物识别登录成功后：向 FastAPI 换取 JWT token（保证大模型等鉴权接口可用）
+  const exchangeExternalToken = useCallback(async (email) => {
+    try {
+      const data = await authApi.external(email);
+      setToken(data.access_token);
+    } catch (err) {
+      console.warn('获取后端 token 失败:', err.message);
+    }
+  }, []);
+
   // 监听 Supabase OAuth 回调 (GitHub 登录)
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    const finalize = (session) => {
+      if (!session?.user) return;
+      const email = session.user.email;
+      const sessionUser = {
+        email,
+        displayName: session.user.user_metadata?.full_name || session.user.user_metadata?.user_name || email,
+        loginMethod: 'github',
+      };
+      setCurrentUser(sessionUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      exchangeExternalToken(email); // 换取 FastAPI JWT
+    };
     // 页面加载时检查是否有 OAuth 回调的 session
     getSession().then(session => {
       if (session?.user) {
-        const email = session.user.email;
-        const sessionUser = {
-          email,
-          displayName: session.user.user_metadata?.full_name || session.user.user_metadata?.user_name || email,
-          loginMethod: 'github',
-        };
-        setCurrentUser(sessionUser);
-        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+        finalize(session);
         setIsLoading(false);
       }
     });
     // 监听后续的认证变化
     const { data: { subscription } } = onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        const email = session.user.email;
-        const sessionUser = {
-          email,
-          displayName: session.user.user_metadata?.full_name || session.user.user_metadata?.user_name || email,
-          loginMethod: 'github',
-        };
-        setCurrentUser(sessionUser);
-        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-      }
+      finalize(session);
     });
     return () => subscription?.unsubscribe();
-  }, []);
+  }, [exchangeExternalToken]);
 
   const clearError = () => setError(null);
 
@@ -120,15 +127,18 @@ export function AuthProvider({ children }) {
   const loginWithPassword = useCallback(async (email, password) => {
     clearError();
     if (!email || !password) { setError('请输入邮箱和密码'); return false; }
-    const users = getUsers();
-    const user = users[email];
-    if (!user) { setError('该邮箱未注册'); return false; }
-    if (!user.passwordHash) { setError('该账号未设置密码，请使用验证码登录'); return false; }
-    if (user.passwordHash !== simpleHash(password)) { setError('密码错误'); return false; }
-    const sessionUser = { email, displayName: user.displayName || email, loginMethod: 'password' };
-    setCurrentUser(sessionUser);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-    return true;
+
+    try {
+      const data = await authApi.login(email, password, null);
+      setToken(data.access_token);
+      const sessionUser = { email, displayName: email.split('@')[0], loginMethod: 'password' };
+      setCurrentUser(sessionUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      return true;
+    } catch (err) {
+      setError(err.message || '登录失败');
+      return false;
+    }
   }, []);
 
   // --- 发送验证码 ---
@@ -138,13 +148,9 @@ export function AuthProvider({ children }) {
       setError('请输入有效的邮箱地址');
       return null;
     }
-    if (!isSupabaseConfigured()) {
-      setError('请先配置 Supabase');
-      return null;
-    }
     try {
-      await sendEmailOtp(email);
-      return true; // Supabase 已发送邮件
+      await authApi.sendCode(email);
+      return true;
     } catch (err) {
       setError('发送失败: ' + (err.message || '未知错误'));
       return null;
@@ -156,21 +162,14 @@ export function AuthProvider({ children }) {
     clearError();
     if (!email || !code) { setError('请输入邮箱和验证码'); return null; }
     if (code.length !== 6) { setError('验证码为6位数字'); return null; }
-    if (!isSupabaseConfigured()) { setError('请先配置 Supabase'); return null; }
 
     try {
-      const { session } = await verifyEmailOtp(email, code);
-      if (session?.user) {
-        const sessionUser = {
-          email: session.user.email,
-          displayName: session.user.email.split('@')[0],
-          loginMethod: 'code',
-        };
-        setCurrentUser(sessionUser);
-        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-        return { ...sessionUser };
-      }
-      return null;
+      const data = await authApi.login(email, null, code);
+      setToken(data.access_token);
+      const sessionUser = { email, displayName: email.split('@')[0], loginMethod: 'code' };
+      setCurrentUser(sessionUser);
+      localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      return sessionUser;
     } catch (err) {
       setError('验证失败: ' + (err.message || '验证码错误'));
       return null;
@@ -180,11 +179,13 @@ export function AuthProvider({ children }) {
   // --- 注册后设置密码 ---
   const setPassword = useCallback(async (email, password) => {
     if (!password || password.length < 6) { setError('密码至少6位'); return false; }
-    const users = getUsers();
-    if (!users[email]) { setError('用户不存在'); return false; }
-    users[email].passwordHash = simpleHash(password);
-    saveUsers(users);
-    return true;
+    try {
+      await authApi.setPassword(password);
+      return true;
+    } catch (err) {
+      setError(err.message || '设置失败');
+      return false;
+    }
   }, []);
 
   // --- GitHub OAuth 登录 ---
@@ -294,6 +295,7 @@ export function AuthProvider({ children }) {
       };
       setCurrentUser(sessionUser);
       localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+      exchangeExternalToken(email); // 换取 FastAPI JWT
       return true;
     } catch (err) {
       console.error('WebAuthn 登录失败:', err);
@@ -315,7 +317,8 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     setCurrentUser(null);
     localStorage.removeItem(SESSION_KEY);
-    supabaseSignOut(); // 同时退出 Supabase
+    setToken(''); // 清除 JWT
+    supabaseSignOut(); // 同时退出 Supabase（如果用了的话）
   }, []);
 
   const value = {

@@ -70,6 +70,7 @@ export default function LoginPage() {
     if (sentCode) {
       setCodeSent(true);
       setCountdown(60);
+      setCode(['', '', '', '', '', '']); // 清空，等待用户输入收到的验证码
     }
   };
 

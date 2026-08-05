@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Home, PieChart as PieChartIcon, Wallet, User, Plus, X,
   Settings, Check, Upload, Mic, Trash2, ArrowUp, ArrowDown, BellOff, LogOut, AlertTriangle,
-  ChevronLeft, ChevronRight, Pencil, Download, FileText, Calendar, KeyRound, Camera
+  ChevronLeft, ChevronRight, Pencil, Download, FileText, Calendar, KeyRound, Camera, Search
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend
@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import { useAuth } from './context/AuthContext';
 import LoginPage from './components/LoginPage';
 import { loadUserData, saveUserData, isSupabaseConfigured } from './lib/supabase';
+import { billsApi, categoriesApi, budgetsApi, aiApi, getToken } from './lib/api';
 
 // --- 初始静态数据 ---
 const DEFAULT_CATEGORIES = [
@@ -19,6 +20,7 @@ const DEFAULT_CATEGORIES = [
   { id: 'c3', name: '购物', type: 'expense', icon: '🛒', color: '#EC4899', active: true, order: 3, subCategories: [{ id: 's5', name: '日用品' }, { id: 's6', name: '数码' }] },
   { id: 'c4', name: '娱乐', type: 'expense', icon: '🎮', color: '#8B5CF6', active: true, order: 4, subCategories: [{ id: 's7', name: '电影' }, { id: 's8', name: '游戏' }] },
   { id: 'c5', name: '工资', type: 'income', icon: '💰', color: '#10B981', active: true, order: 5, subCategories: [] },
+  { id: 'c6', name: '其他', type: 'expense', icon: '📦', color: '#9CA3AF', active: true, order: 6, subCategories: [] },
 ];
 
 const ICONS_POOL = [
@@ -86,6 +88,39 @@ export default function App() {
     }, 2000);
     return () => clearTimeout(timer);
   }, [records, categories, budget, syncStatus]);
+
+  // ===== 后端 API 同步 =====
+  useEffect(() => {
+    if (!auth.currentUser?.email || !getToken()) return;
+    // 从后端 API 加载数据
+    Promise.all([
+      billsApi.list().catch(() => []),
+      categoriesApi.list().catch(() => []),
+      budgetsApi.list().catch(() => []),
+    ]).then(([apiRecords, apiCategories, apiBudgets]) => {
+      if (apiRecords?.length) setRecords(apiRecords.map(r => ({
+        ...r, id: String(r.id), categoryId: String(r.category_id),
+        subCategoryName: r.sub_category_name || '', date: r.biz_date || r.date,
+        isReimbursable: r.is_reimbursable || false
+      })));
+      if (apiCategories?.length) {
+        // 后端是扁平 parent_id 结构，组装成 主分类+subCategories 嵌套结构
+        const flat = apiCategories.map(c => ({ ...c, id: String(c.id), active: c.is_active !== false, order: c.sort_order || 0 }));
+        const mainCats = flat.filter(c => !c.parent_id).map(c => ({
+          ...c,
+          subCategories: flat.filter(s => String(s.parent_id) === c.id).map(s => ({ id: s.id, name: s.name, icon: s.icon, color: s.color }))
+        }));
+        // 记录 id → name 映射，供账单显示子分类名
+        if (flat.length) setCategories(mainCats);
+      }
+      if (apiBudgets?.length && !apiBudgets.error) {
+        const total = apiBudgets.find(b => !b.category_id)?.amount || 3000;
+        const catBudget = {};
+        apiBudgets.filter(b => b.category_id).forEach(b => { catBudget[String(b.category_id)] = b.amount; });
+        setBudget({ total, categoryBudgets: catBudget });
+      }
+    }).catch(() => {});
+  }, [auth.currentUser?.email]);
 
   // --- 衍生数据计算 ---
   const currentMonth = new Date().getMonth();
@@ -389,6 +424,52 @@ function AddRecordModal({ onClose, categories, onSave }) {
   const [isListening, setIsListening] = useState(false);
   const [attachments, setAttachments] = useState([]); // 照片附件 (base64)
 
+  // 语义关键词映射：大模型返回的自由分类名 → 已有主分类
+  const CATEGORY_KEYWORDS = {
+    '餐饮': ['餐', '食', '吃', '饭', '面', '饮', '咖啡', '奶茶', '茶', '奶', '早餐', '午餐', '晚餐', '外卖', '夜宵', '水', '零食', '水果', '菜', '汉堡', '披萨', '超市便当'],
+    '交通': ['车', '地铁', '公交', '出租', '打车', '加油', '停车', '高铁', '机票', '充电', '骑行', '单车', '油费', '过路'],
+    '购物': ['购', '买', '超市', '百货', '用品', '衣服', '鞋', '数码', '日用品', '商场', '便利店', '淘宝', '京东', '生活用品', '家居'],
+    '娱乐': ['电影', '游戏', 'KTV', '音乐', '演出', '旅游', '景区', '门票', '健身', '运动', '网吧', '桌游'],
+    '住房': ['房租', '水电', '煤气', '燃气', '物业', '维修', '家电', '家具', '宽带'],
+    '医疗': ['药', '医院', '挂号', '体检', '牙', '医', '疫苗'],
+  };
+
+  // 根据建议分类名匹配主分类+子分类
+  const applySuggestedCategory = (suggestedName, cats) => {
+    if (!suggestedName) return;
+    const name = String(suggestedName).trim();
+    // 1) 先匹配子分类（建议名包含子分类名或反之）
+    const withSub = cats.find(c =>
+      c.subCategories?.find(s => name.includes(s.name) || s.name.includes(name))
+    );
+    if (withSub) {
+      setSelectedCat(withSub);
+      const sub = withSub.subCategories.find(s => name.includes(s.name) || s.name.includes(name));
+      if (sub) setSelectedSubCat(sub);
+      return;
+    }
+    // 2) 精确匹配主分类
+    const found = cats.find(c => c.name === name || c.name.includes(name) || name.includes(c.name));
+    if (found) {
+      setSelectedCat(found);
+      setSelectedSubCat(null);
+      return;
+    }
+    // 3) 语义关键词兜底：映射到已有主分类
+    for (const [catName, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+      if (keywords.some(k => name.includes(k))) {
+        const cat = cats.find(c => c.name === catName);
+        if (cat) {
+          setSelectedCat(cat);
+          setSelectedSubCat(null);
+          return;
+        }
+      }
+    }
+    // 4) 都没匹配到 → 落到"其他"
+    setSelectedCat(cats.find(c => c.name === '其他') || null);
+  };
+
   // 中文数字转阿拉伯数字
   const parseChineseNumber = (text) => {
     const map = { '零':0,'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,
@@ -447,12 +528,20 @@ function AddRecordModal({ onClose, categories, onSave }) {
       setSmartText(cleaned);
       setIsListening(false);
       setTimeout(() => {
+        // 优先大模型识别
+        if (getToken()) {
+          aiApi.recognizeText(cleaned, categories.filter(c => c.type === type).map(c => c.name)).then(res => {
+            const r = res.result;
+            if (r.amount) setAmount(String(r.amount));
+            applySuggestedCategory(r.suggested_category_name, categories.filter(c => c.type === type).sort((a,b) => a.order - b.order));
+            if (r.note) setRemark(r.note);
+          }).catch(() => {});
+        }
+        // 正则降级
         const match = cleaned.match(/(\D+)\s*(\d+(?:\.\d+)?)/);
-        const keyword = match ? match[1].trim() : cleaned; // 无数字时整句都是关键词
-        if (match) setAmount(match[2]);
-
+        const keyword = match ? match[1].trim() : cleaned;
+        if (match && !getToken()) setAmount(match[2]);
         const cats = categories.filter(c => c.type === type).sort((a,b) => a.order - b.order);
-        // 匹配逻辑：关键词包含分类名/子分类名，或反过来
         const foundCat = cats.find(c =>
           keyword.includes(c.name) || c.name.includes(keyword) ||
           (c.subCategories?.find(s => keyword.includes(s.name) || s.name.includes(keyword)))
@@ -498,12 +587,23 @@ function AddRecordModal({ onClose, categories, onSave }) {
   // 获取当前类型下激活的主分类
   const activeCategories = categories.filter(c => c.type === type).sort((a,b) => a.order - b.order);
 
-  // 智能解析文本 (例如 "午餐 25")
+  // 智能解析文本（优先大模型，降级正则）
   const handleSmartParse = () => {
     if(!smartText) return;
+    // 尝试大模型识别
+    if (getToken()) {
+      aiApi.recognizeText(smartText, activeCategories.map(c => c.name)).then(res => {
+        const r = res.result;
+        if (r.amount) setAmount(String(r.amount));
+        applySuggestedCategory(r.suggested_category_name, activeCategories);
+        if (r.note) setRemark(r.note);
+        if (r.biz_date) setRecordDate(r.biz_date);
+      }).catch(() => { /* 失败静默，降级正则 */ });
+    }
+    // 正则降级（立即执行，大模型结果异步覆盖）
     const match = smartText.match(/(\D+)\s*(\d+(?:\.\d+)?)/);
     const keyword = match ? match[1].trim() : smartText;
-    if(match) setAmount(match[2]);
+    if(match && !getToken()) setAmount(match[2]); // 无 API 时用正则金额
     const cat = activeCategories.find(c =>
       keyword.includes(c.name) || c.name.includes(keyword) ||
       (c.subCategories?.find(s => keyword.includes(s.name) || s.name.includes(keyword)))
@@ -519,12 +619,22 @@ function AddRecordModal({ onClose, categories, onSave }) {
   const handlePickImage = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // 限制 5MB
     if (file.size > 5 * 1024 * 1024) { alert('图片不能超过 5MB'); return; }
     const reader = new FileReader();
     reader.onload = () => setAttachments(prev => [...prev, reader.result]);
     reader.readAsDataURL(file);
-    e.target.value = ''; // 允许重复选同一文件
+    e.target.value = '';
+    // 大模型图片识别
+    if (getToken()) {
+      const catNames = activeCategories.map(c => c.name).join(',');
+      aiApi.recognizeImage(file, catNames).then(res => {
+        const r = res.result;
+        if (r.amount) setAmount(String(r.amount));
+        applySuggestedCategory(r.suggested_category_name, activeCategories);
+        if (r.note) setRemark(r.note);
+        if (r.biz_date) setRecordDate(r.biz_date);
+      }).catch(() => {});
+    }
   };
 
   const removeAttachment = (idx) => setAttachments(prev => prev.filter((_, i) => i !== idx));
@@ -682,6 +792,9 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
   const [editAmount, setEditAmount] = useState('');
   const [editDate, setEditDate] = useState('');
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [swipedId, setSwipedId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const touchStartX = useRef(0);
 
   const [reportDate, setReportDate] = useState(() => new Date());
   const reportMonth = reportDate.getMonth();
@@ -695,6 +808,20 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
   }, [records, reportMonth, reportYear]);
 
   const expenseRecords = reportRecords.filter(r => r.type === 'expense' && !r.isReimbursable);
+
+  // 搜索过滤
+  const filteredRecords = useMemo(() => {
+    if (!searchQuery.trim()) return reportRecords;
+    const q = searchQuery.trim().toLowerCase();
+    return reportRecords.filter(r => {
+      const cat = categories.find(c => c.id === r.categoryId);
+      return (r.remark || '').toLowerCase().includes(q) ||
+        (cat?.name || '').toLowerCase().includes(q) ||
+        (r.subCategoryName || '').toLowerCase().includes(q) ||
+        String(r.amount).includes(q) ||
+        r.date.split('T')[0].includes(q);
+    });
+  }, [reportRecords, searchQuery, categories]);
   const reportExpense = expenseRecords.reduce((sum, r) => sum + Number(r.amount), 0);
   const reportIncome = reportRecords.filter(r => r.type === 'income').reduce((sum, r) => sum + Number(r.amount), 0);
 
@@ -726,6 +853,25 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
 
   const toggleBatchMode = () => { setIsBatchMode(!isBatchMode); setSelectedIds([]); };
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+
+  // 左滑删除手势
+  const handleTouchStart = (e, id) => { touchStartX.current = e.touches[0].clientX; setSwipedId(id); };
+  const handleTouchMove = (e, id) => {
+    if (swipedId !== id) return;
+    const dx = touchStartX.current - e.touches[0].clientX;
+    const el = document.getElementById(`swipe-${id}`);
+    if (el) el.style.transform = `translateX(${Math.max(-80, -dx)}px)`;
+  };
+  const handleTouchEnd = (e, id) => {
+    const dx = touchStartX.current - e.changedTouches[0].clientX;
+    const el = document.getElementById(`swipe-${id}`);
+    if (dx > 60) {
+      if (el) el.style.transform = 'translateX(-80px)';
+    } else {
+      if (el) el.style.transform = 'translateX(0)';
+      setSwipedId(null);
+    }
+  };
 
   const handleSelectAll = () => {
     if (selectedIds.length === reportRecords.length) setSelectedIds([]);
@@ -894,8 +1040,20 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
 
       {/* 账单明细列表 */}
       <div className="mx-4 mt-5">
+        {/* 搜索栏 */}
+        <div className="relative mb-4">
+          <input type="text" placeholder="搜索备注/分类/金额/日期..." value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-white pl-10 pr-4 py-2.5 rounded-xl text-sm outline-none border border-gray-100 focus:border-[#5A54F9] transition-colors shadow-sm" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={14} />
+            </button>
+          )}
+        </div>
         <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-gray-900 text-[16px]">账单明细 ({reportYear}-{String(reportMonth + 1).padStart(2, '0')})</h3>
+          <h3 className="font-bold text-gray-900 text-[16px]">账单明细 ({reportYear}-{String(reportMonth + 1).padStart(2, '0')}){searchQuery && <span className="text-xs text-gray-400 font-normal ml-1">筛选 {filteredRecords.length}/{reportRecords.length}</span>}</h3>
           <div className="flex items-center gap-3">
               {isBatchMode && (
                  <button onClick={handleSelectAll} className="text-sm text-gray-500 hover:text-indigo-500 transition-colors">
@@ -909,11 +1067,21 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
         </div>
 
         <div className="space-y-3">
-          {reportRecords.length === 0 ? <p className="text-center text-gray-400 text-sm py-6">无账单记录</p> :
-           reportRecords.sort((a, b) => new Date(b.date) - new Date(a.date)).map(r => {
+          {filteredRecords.length === 0 ? <p className="text-center text-gray-400 text-sm py-6">{searchQuery ? '未找到匹配的账单，请调整搜索条件' : '无账单记录'}</p> :
+           filteredRecords.sort((a, b) => new Date(b.date) - new Date(a.date)).map(r => {
             const cat = categories.find(c => c.id === r.categoryId) || {};
             return (
-              <div key={r.id} className="group bg-white p-3.5 rounded-2xl flex items-center justify-between border border-gray-50 shadow-sm hover:shadow-md transition-all cursor-default relative">
+              <div key={r.id} className="relative"
+                onTouchStart={e => handleTouchStart(e, r.id)}
+                onTouchMove={e => handleTouchMove(e, r.id)}
+                onTouchEnd={e => handleTouchEnd(e, r.id)}>
+                {/* 左滑露出的红色删除背景 */}
+                <div className="absolute inset-y-0 right-0 w-20 bg-red-500 rounded-2xl overflow-hidden flex items-center justify-center">
+                  <button onClick={(e) => { e.stopPropagation(); if(onDelete) onDelete(r.id); setSwipedId(null); }}
+                    className="text-white font-bold text-sm">删除</button>
+                </div>
+                {/* 可滑动的卡片主体 */}
+                <div id={`swipe-${r.id}`} className="group bg-white p-3.5 rounded-2xl flex items-center justify-between border border-gray-50 shadow-sm hover:shadow-md transition-all cursor-default relative z-10" style={{transition: 'transform 0.2s ease'}}>
                 <div className="flex items-center gap-3">
                   {isBatchMode && <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-[#5A54F9]" checked={selectedIds.includes(r.id)} onChange={() => toggleSelect(r.id)} />}
 
@@ -931,29 +1099,26 @@ function ReportsTab({ records, categories, onDeleteBatch, onDelete, onUpdate }) 
                   </div>
                 </div>
 
-                {/* 悬停显示操作按钮的容器 */}
+                {/* 操作按钮容器 */}
                 <div className="relative flex items-center justify-end w-28 overflow-hidden h-full">
                   <span className={`text-[15px] font-bold font-mono transition-all duration-200 group-hover:opacity-0 group-hover:-translate-x-6 ${r.type === 'income' ? 'text-[#05c160]' : 'text-[#ee0a24]'}`}>
                     {r.type === 'income' ? '+' : '-'}&yen;{formatMoney(r.amount)}
                   </span>
 
-                  {/* 悬停时出现的修改分类按钮 */}
                   <button
                     onClick={(e) => { e.stopPropagation(); openEdit(r); }}
-                    className="absolute inset-y-0 right-8 flex items-center justify-end text-gray-400 hover:text-[#5A54F9] opacity-0 transform translate-x-4 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 px-1"
-                    title="修改"
-                  >
+                    className="absolute inset-y-0 right-8 flex items-center justify-end text-gray-400 hover:text-[#5A54F9] opacity-100 sm:opacity-0 transform translate-x-0 sm:translate-x-4 sm:group-hover:opacity-100 sm:group-hover:translate-x-0 transition-all duration-200 px-1"
+                    title="修改">
                     <Pencil size={18} />
                   </button>
 
-                  {/* 悬停时出现的删除按钮 */}
                   <button
                     onClick={(e) => { e.stopPropagation(); if(onDelete) onDelete(r.id); }}
-                    className="absolute inset-y-0 right-0 flex items-center justify-end text-red-400 hover:text-red-600 opacity-0 transform translate-x-4 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 px-1"
-                    title="删除记录"
-                  >
+                    className="absolute inset-y-0 right-0 flex items-center justify-end text-red-400 hover:text-red-600 opacity-100 sm:opacity-0 transform translate-x-0 sm:translate-x-4 sm:group-hover:opacity-100 sm:group-hover:translate-x-0 transition-all duration-200 px-1"
+                    title="删除记录">
                     <Trash2 size={20} />
                   </button>
+                </div>
                 </div>
 
                 {/* 修改分类弹出选择器 */}
@@ -1633,7 +1798,7 @@ function CategoryEditor({ categories, setCategories, onClose }) {
                   <span key={sub.id} className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full group/sub">
                     {sub.name}
                     <button onClick={() => handleDeleteSub(cat.id, sub.id)}
-                      className="opacity-0 group-hover/sub:opacity-100 hover:text-red-500 transition-all ml-0.5"><X size={12} /></button>
+                      className="opacity-100 sm:opacity-0 sm:group-hover/sub:opacity-100 hover:text-red-500 transition-all ml-0.5"><X size={12} /></button>
                   </span>
                 ))}
               </div>
