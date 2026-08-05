@@ -100,7 +100,9 @@ export async function loadUserData(email) {
       .eq('email', email)
       .maybeSingle();
     if (error) throw error;
-    return data?.data || null; // { records, categories, budget }
+    let raw = data?.data;
+    if (typeof raw === 'string') raw = JSON.parse(raw); // 兼容 JSON 字符串
+    return raw || null; // { records, categories, budget }
   } catch (err) {
     console.error('加载云端数据失败:', err.message);
     return null;
@@ -113,7 +115,7 @@ export async function saveUserData(email, data) {
   try {
     const { error } = await supabase
       .from('user_data')
-      .upsert({ email, data, updated_at: new Date().toISOString() }, { onConflict: 'email' });
+      .upsert({ email, data: JSON.stringify(data), updated_at: new Date().toISOString() }, { onConflict: 'email' });
     if (error) throw error;
     return true;
   } catch (err) {
