@@ -92,28 +92,43 @@ export default function App() {
   // ===== Supabase 云端同步（主数据存储）=====
   // 数据存在 Supabase，不会因 Render 重启丢失。后端 FastAPI 只管认证 + AI 识别。
 
-  // 登录后从 Supabase 拉取数据
+  // 登录后从 Supabase 拉取数据（含首次迁移逻辑）
   useEffect(() => {
     if (!isSupabaseConfigured() || !auth.currentUser?.email) return;
+    const email = auth.currentUser.email;
     setSyncStatus('syncing');
-    loadUserData(auth.currentUser.email).then(cloudData => {
-      if (cloudData) {
+    loadUserData(email).then(cloudData => {
+      const hasCloud = cloudData?.records?.length || cloudData?.categories?.length;
+      const hasLocal = records.length > 0 || categories.length > DEFAULT_CATEGORIES.length;
+
+      if (hasCloud) {
+        // 云端有数据 → 用云端的
         if (cloudData.records?.length) setRecords(cloudData.records);
         if (cloudData.categories?.length) setCategories(cloudData.categories);
         if (cloudData.budget) setBudget(cloudData.budget);
+      } else if (hasLocal) {
+        // 云端空 + 本地有数据 → 首次迁移：推本地到云端
+        console.log('⬆️ 首次数据迁移：本地 → Supabase');
+        saveUserData(email, { records, categories, budget });
       }
       setSyncStatus('online');
     }).catch(() => setSyncStatus('error'));
   }, [auth.currentUser?.email]);
 
-  // 数据变更后推送到 Supabase（限流 2 秒）
+  // 数据变更后推送到 Supabase（限流 2 秒）+ 页面关闭前强制推送
   useEffect(() => {
     if (!isSupabaseConfigured() || !auth.currentUser?.email) return;
     if (syncStatus === 'off' || syncStatus === 'syncing') return;
     const timer = setTimeout(() => {
       saveUserData(auth.currentUser.email, { records, categories, budget });
     }, 2000);
-    return () => clearTimeout(timer);
+    // 页面关闭前强制保存
+    const handleUnload = () => saveUserData(auth.currentUser.email, { records, categories, budget });
+    window.addEventListener('beforeunload', handleUnload);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
   }, [records, categories, budget, syncStatus]);
 
   // --- 衍生数据计算 ---
