@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Mail, KeyRound, Fingerprint, Github, ArrowLeft,
-  Eye, EyeOff, ShieldCheck, LogOut, Smartphone, CheckCircle,
+  Eye, EyeOff, ShieldCheck, LogOut, CheckCircle,
   Sparkles, AlertCircle, RefreshCw
 } from 'lucide-react';
 import { useAuth, isWebAuthnSupported } from '../context/AuthContext';
@@ -154,15 +154,6 @@ export default function LoginPage() {
     if (!email) { setLocalError('请先输入邮箱地址以查找您的生物识别凭据'); return; }
     setIsSubmitting(true);
     await auth.loginWithWebAuthn(email);
-    setIsSubmitting(false);
-  };
-
-  // --- 注册生物识别 ---
-  const handleRegisterWebAuthn = async () => {
-    clearAllErrors();
-    if (!email) { setLocalError('请先输入邮箱地址'); return; }
-    setIsSubmitting(true);
-    await auth.registerWebAuthn(email);
     setIsSubmitting(false);
   };
 
@@ -437,22 +428,10 @@ export default function LoginPage() {
                 <Fingerprint size={20} />
                 {isSubmitting ? '验证中...' : '指纹 / 面容 登录'}
               </button>
-
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200"></div></div>
-                <div className="relative flex justify-center"><span className="bg-gray-50 px-3 text-xs text-gray-400">或</span></div>
-              </div>
-
-              <button onClick={handleRegisterWebAuthn} disabled={isSubmitting || !email}
-                className="w-full py-3 bg-white text-gray-700 rounded-xl font-medium border border-gray-200 hover:bg-gray-50 transition disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                <Smartphone size={18} />
-                {isSubmitting ? '注册中...' : '注册本设备指纹 / 面容'}
-              </button>
             </div>
 
             <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">
-              首次使用请先输入邮箱并点击"注册"绑定<br />
+              请先使用其他方式登录，在"我的"页面绑定指纹<br />
               之后即可一键指纹/面容登录
             </p>
 
