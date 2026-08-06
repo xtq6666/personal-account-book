@@ -272,15 +272,21 @@ export function AuthProvider({ children }) {
         return false;
       }
 
+      // 检测平台认证器是否可用（Windows Hello / Touch ID / Face ID）
+      const hasPlatform = await checkPlatformAuth();
+      if (!hasPlatform) {
+        setError('此设备未启用指纹/面容，请使用其他登录方式');
+        return false;
+      }
+
       const challenge = generateChallenge();
       const publicKey = {
         challenge,
-        timeout: 60000,
+        timeout: 30000,
         rpId: window.location.hostname,
         allowCredentials: [{
           id: base64URLToBuffer(user.webauthnCredential.rawId),
           type: 'public-key',
-          transports: ['internal'],
         }],
         userVerification: 'required',
       };
