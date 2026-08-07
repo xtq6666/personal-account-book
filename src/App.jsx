@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Home, PieChart as PieChartIcon, Wallet, User, Plus, X,
   Settings, Check, Upload, Mic, Trash2, ArrowUp, ArrowDown, BellOff, LogOut, AlertTriangle,
-  ChevronLeft, ChevronRight, Pencil, Download, FileText, Calendar, KeyRound, Camera, Search
+  ChevronLeft, ChevronRight, Pencil, Download, FileText, Calendar, KeyRound, Camera, Search, Sparkles
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend
@@ -682,7 +682,8 @@ function AddRecordModal({ onClose, categories, onSave }) {
 
         {/* 智能输入框 */}
         <div className="flex gap-2 mb-1">
-          <input type="text" placeholder="粘贴文本自动识别(例: 午餐 25)" value={smartText} onChange={e=>setSmartText(e.target.value)} onBlur={handleSmartParse} className="flex-1 bg-gray-50 p-2 rounded-lg text-sm outline-none border border-gray-100 focus:border-blue-300"/>
+          <input type="text" placeholder="输入文字描述(例: 午餐 25)" value={smartText} onChange={e=>setSmartText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSmartParse()} className="flex-1 bg-gray-50 p-2 rounded-lg text-sm outline-none border border-gray-100 focus:border-blue-300"/>
+          <button onClick={handleSmartParse} disabled={!smartText.trim()} className="p-2 rounded-lg transition-all shrink-0 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed" title="AI 识别"><Sparkles size={18}/></button>
           <button onClick={startVoice} disabled={isListening} className={`p-2 rounded-lg transition-all shrink-0 ${isListening ? 'bg-red-50 text-red-500 animate-pulse' : 'bg-gray-50 text-gray-500 hover:text-blue-500'}`} title="语音录入"><Mic size={18}/></button>
         </div>
 
