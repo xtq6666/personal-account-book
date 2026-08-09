@@ -433,6 +433,7 @@ function AddRecordModal({ onClose, categories, onSave }) {
   const [smartText, setSmartText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [attachments, setAttachments] = useState([]); // 照片附件 (base64)
+  const [aiError, setAiError] = useState(null); // AI 识别错误提示
 
   // 语义关键词映射：大模型返回的自由分类名 → 已有主分类
   const CATEGORY_KEYWORDS = {
@@ -600,6 +601,7 @@ function AddRecordModal({ onClose, categories, onSave }) {
   // 智能解析文本（优先大模型，降级正则）
   const handleSmartParse = () => {
     if(!smartText) return;
+    setAiError(null);
     // 尝试大模型识别
     if (getToken()) {
       aiApi.recognizeText(smartText, activeCategories.map(c => c.name)).then(res => {
@@ -608,12 +610,15 @@ function AddRecordModal({ onClose, categories, onSave }) {
         applySuggestedCategory(r.suggested_category_name, activeCategories);
         if (r.note) setRemark(r.note);
         if (r.biz_date) setRecordDate(r.biz_date);
-      }).catch(() => { /* 失败静默，降级正则 */ });
+      }).catch((err) => {
+        console.error('AI 识别失败:', err);
+        setAiError('AI 识别失败，已用本地规则填充');
+      });
     }
     // 正则降级（立即执行，大模型结果异步覆盖）
     const match = smartText.match(/(\D+)\s*(\d+(?:\.\d+)?)/);
     const keyword = match ? match[1].trim() : smartText;
-    if(match && !getToken()) setAmount(match[2]); // 无 API 时用正则金额
+    if(match) setAmount(match[2]);
     const cat = activeCategories.find(c =>
       keyword.includes(c.name) || c.name.includes(keyword) ||
       (c.subCategories?.find(s => keyword.includes(s.name) || s.name.includes(keyword)))
@@ -637,13 +642,17 @@ function AddRecordModal({ onClose, categories, onSave }) {
     // 大模型图片识别
     if (getToken()) {
       const catNames = activeCategories.map(c => c.name).join(',');
+      setAiError(null);
       aiApi.recognizeImage(file, catNames).then(res => {
         const r = res.result;
         if (r.amount) setAmount(String(r.amount));
         applySuggestedCategory(r.suggested_category_name, activeCategories);
         if (r.note) setRemark(r.note);
         if (r.biz_date) setRecordDate(r.biz_date);
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error('图片识别失败:', err);
+        setAiError('图片识别失败: ' + (err.message || '未知错误'));
+      });
     }
   };
 
@@ -682,10 +691,15 @@ function AddRecordModal({ onClose, categories, onSave }) {
 
         {/* 智能输入框 */}
         <div className="flex gap-2 mb-1">
-          <input type="text" placeholder="输入文字描述(例: 午餐 25)" value={smartText} onChange={e=>setSmartText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSmartParse()} className="flex-1 bg-gray-50 p-2 rounded-lg text-sm outline-none border border-gray-100 focus:border-blue-300"/>
+          <input type="text" placeholder="输入文字描述(例: 午餐 25)" value={smartText} onChange={e=>{setSmartText(e.target.value); setAiError(null);}} onKeyDown={e => e.key === 'Enter' && handleSmartParse()} className="flex-1 bg-gray-50 p-2 rounded-lg text-sm outline-none border border-gray-100 focus:border-blue-300"/>
           <button onClick={handleSmartParse} disabled={!smartText.trim()} className="p-2 rounded-lg transition-all shrink-0 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed" title="AI 识别"><Sparkles size={18}/></button>
           <button onClick={startVoice} disabled={isListening} className={`p-2 rounded-lg transition-all shrink-0 ${isListening ? 'bg-red-50 text-red-500 animate-pulse' : 'bg-gray-50 text-gray-500 hover:text-blue-500'}`} title="语音录入"><Mic size={18}/></button>
         </div>
+        {aiError && (
+          <div className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 px-2 py-1.5 rounded-lg mb-2">
+            <AlertTriangle size={14} />{aiError}
+          </div>
+        )}
 
         {/* 拍照附件按钮（独立一行，避免与智能输入冲突） */}
         <div className="mb-3">

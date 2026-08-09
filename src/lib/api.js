@@ -22,13 +22,24 @@ async function request(method, path, body = null, isFormData = false) {
   const opts = { method, headers };
   if (body) opts.body = isFormData ? body : JSON.stringify(body);
 
-  const res = await fetch(`${BASE_URL}${path}`, opts);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `请求失败 (${res.status})`);
+  const url = `${BASE_URL}${path}`;
+  console.log(`[API] ${method} ${url}`);
+  try {
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      const error = new Error(err.detail || `请求失败 (${res.status})`);
+      console.error(`[API] ${method} ${url} → ${res.status}:`, error.message);
+      throw error;
+    }
+    const contentType = res.headers.get('content-type') || '';
+    return contentType.includes('application/json') ? res.json() : res;
+  } catch (e) {
+    if (e.name === 'TypeError' && e.message === 'Failed to fetch') {
+      console.error(`[API] 网络请求失败: ${url}`, e);
+    }
+    throw e;
   }
-  const contentType = res.headers.get('content-type') || '';
-  return contentType.includes('application/json') ? res.json() : res;
 }
 
 // ========== 认证 ==========
