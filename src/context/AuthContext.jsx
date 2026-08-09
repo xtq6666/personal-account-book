@@ -82,6 +82,18 @@ export function AuthProvider({ children }) {
     setIsLoading(false);
   }, []);
 
+  // 监听 JWT token 过期事件（由 api.js 在收到 401 时触发）
+  useEffect(() => {
+    const handler = () => {
+      console.warn('JWT token 已过期，需要重新登录');
+      setCurrentUser(null);
+      localStorage.removeItem(SESSION_KEY);
+      setError('登录已过期，请重新登录');
+    };
+    window.addEventListener('auth:tokenExpired', handler);
+    return () => window.removeEventListener('auth:tokenExpired', handler);
+  }, []);
+
   // 第三方/生物识别登录成功后：向 FastAPI 换取 JWT token（保证大模型等鉴权接口可用）
   const exchangeExternalToken = useCallback(async (email) => {
     try {

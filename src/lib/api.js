@@ -27,6 +27,12 @@ async function request(method, path, body = null, isFormData = false) {
   try {
     const res = await fetch(url, opts);
     if (!res.ok) {
+      // 401 → token 过期，自动清除并通知用户重新登录
+      if (res.status === 401) {
+        console.warn('[API] Token 已过期，请重新登录');
+        localStorage.removeItem('auth_token');
+        window.dispatchEvent(new CustomEvent('auth:tokenExpired'));
+      }
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       const error = new Error(err.detail || `请求失败 (${res.status})`);
       console.error(`[API] ${method} ${url} → ${res.status}:`, error.message);
